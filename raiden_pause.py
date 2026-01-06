@@ -24,7 +24,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple, TYPE_CHECKING, Any
 
 import psutil
 
@@ -32,6 +32,15 @@ try:
     import pyautogui
 except ImportError:
     pyautogui = None
+try:
+    import cv2  # type: ignore
+except ImportError:
+    cv2 = None
+
+if TYPE_CHECKING:
+    from pyautogui import Box as PyAutoGuiBox
+else:
+    PyAutoGuiBox = Any
 
 try:
     from win10toast import ToastNotifier
@@ -59,6 +68,7 @@ WATCH_PROCESSES = {
     "forzahorizon5.exe", # Forza Horizon 5
     "gtav.exe",          # GTA V
     "easportsfc24.exe",  # EA SPORTS FC example; adjust to your actual exe
+    "notepad.exe",
 }
 
 # How often to poll for processes (seconds).
@@ -158,20 +168,29 @@ def restore_foreground(hwnd: Optional[int]) -> None:
         pass
 
 
-def locate_button(templates: List[Path], region: Optional[Tuple[int, int, int, int]] = None) -> Optional[pyautogui.Box]:
+def locate_button(templates: List[Path], region: Optional[Tuple[int, int, int, int]] = None) -> Optional[PyAutoGuiBox]:
     if not pyautogui:
         log("pyautogui not installed; cannot locate button.")
         return None
+    use_confidence = MATCH_CONFIDENCE < 1.0 and cv2 is not None
+    if MATCH_CONFIDENCE < 1.0 and cv2 is None:
+        log("OpenCV not installed; falling back to default template matching.")
     for tpl in templates:
         if not tpl.exists():
             log(f"Template not found: {tpl}")
             continue
         try:
-            box = pyautogui.locateOnScreen(
-                str(tpl),
-                confidence=MATCH_CONFIDENCE if MATCH_CONFIDENCE < 1.0 else None,
-                region=region,
-            )
+            if use_confidence:
+                box = pyautogui.locateOnScreen(
+                    str(tpl),
+                    confidence=MATCH_CONFIDENCE,
+                    region=region,
+                )
+            else:
+                box = pyautogui.locateOnScreen(
+                    str(tpl),
+                    region=region,
+                )
             if box:
                 log(f"Found button via template: {tpl.name} at {box}")
                 return box
@@ -180,7 +199,7 @@ def locate_button(templates: List[Path], region: Optional[Tuple[int, int, int, i
     return None
 
 
-def click_center(box: pyautogui.Box) -> bool:
+def click_center(box: PyAutoGuiBox) -> bool:
     if not pyautogui:
         return False
     try:
