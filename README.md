@@ -61,6 +61,15 @@ D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
 3. 游戏结束退出后，脚本会尝试自动暂停
 4. 如果识别失败，会弹出通知提醒手动暂停
 
+快速开始：
+
+```
+D:\Python\Python311\python.exe -m pip install -r D:\Study\raiden_pause\requirements.txt
+D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
+```
+
+提示：`assets/` 目录需要放置 `start_button.png` 与 `unstart_button.png` 模板图。
+
 ## 原理说明
 
 - 定期轮询进程列表，判断是否有游戏/Steam 在运行
@@ -84,6 +93,8 @@ D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
 D:\Python\Python311\python.exe -m pip install opencv-python
 D:\Python\Python311\python.exe -c "import cv2; print(cv2.__version__)"
 ```
+- 点击是通过截图吗？不是。脚本优先使用 UI 自动化点击按钮，只有 UIA 与托盘恢复都失败时才会回退到截图匹配。
+- 从最小化/托盘如何恢复到前台？优先用 pywin32 根据进程句柄调用恢复显示，其次用 pywinauto 点击托盘图标（含“显示隐藏的图标”）触发恢复。
 - 找不到按钮：确认雷神窗口可见且未被遮挡；模板截图与当前按钮一致（颜色/字体/分辨率）。
 - 识别不准：建议系统显示缩放设为 100%，否则模板匹配容易偏差。
 - 多显示器：尽量把雷神窗口放在主屏幕，再尝试。
