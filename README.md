@@ -6,7 +6,8 @@
 
 - 监听 Steam / EA / 多款游戏进程
 - 进程全部退出时触发自动暂停流程
-- 通过模板匹配定位按钮并模拟点击
+- 优先使用 UI 自动化定位并点击按钮（支持最小化/托盘场景）
+- 失败时回退到模板匹配模拟点击
 - Windows 通知提示执行结果
 
 ## 环境要求
@@ -48,6 +49,7 @@ D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
 在 `raiden_pause.py` 顶部可调整：
 
 - `WINDOW_TITLE_KEYWORDS`：雷神窗口标题关键字
+- `RAIDEN_PROCESS_NAME`：雷神主进程名（用于 UI 自动化优先过滤）
 - `WATCH_PROCESSES`：需要监听的进程名（小写）
 - `POLL_INTERVAL`：轮询间隔（秒）
 - `MATCH_CONFIDENCE`：模板匹配阈值
@@ -62,16 +64,17 @@ D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
 ## 原理说明
 
 - 定期轮询进程列表，判断是否有游戏/Steam 在运行
-- 当全部目标进程退出时，尝试找到雷神窗口并置前
-- 使用模板匹配在屏幕中定位按钮区域
-- 找到“暂停时长”按钮后模拟点击
+- 当全部目标进程退出时，优先使用 UI 自动化按进程定位按钮并触发点击
+- 如遇多窗口同标题冲突，按进程名筛选目标窗口
+- UI 自动化失败时尝试从托盘恢复并重试
+- 最后回退到模板匹配在屏幕中定位按钮区域并模拟点击
 
 ## 使用流程（V1）
 
 1. 游戏/Steam 进程退出
 2. 弹出通知提醒
-3. 自动尝试切换到雷神窗口
-4. 截屏识别“暂停时长”按钮并点击
+3. 优先 UI 自动化触发“暂停时长”
+4. 失败时再尝试托盘恢复与截图识别
 5. 二次通知提示结果
 
 ## 常见问题与排错
@@ -86,6 +89,15 @@ D:\Python\Python311\python.exe -c "import cv2; print(cv2.__version__)"
 - 多显示器：尽量把雷神窗口放在主屏幕，再尝试。
 - 没有点击动作：检查是否有安全软件/权限拦截；可尝试以普通用户权限运行。
 - 一直不触发：确认 `WATCH_PROCESSES` 中的进程名与实际 exe 一致（小写）。
+- UIA 提示多窗口匹配：检查是否有浏览器标签页包含“雷神加速器”字样，可用调试脚本定位窗口来源。
+
+## 调试工具
+
+列出 UIA 命中的窗口，排查多窗口冲突：
+
+```
+D:\Python\Python311\python.exe D:\Study\raiden_pause\test\debug_uia_windows.py
+```
 
 ## 已知限制
 
