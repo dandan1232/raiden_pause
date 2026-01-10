@@ -91,6 +91,11 @@ WATCH_PROCESSES = {
 # How often to poll for processes (seconds).
 POLL_INTERVAL = 5
 
+# UI timing (seconds); reduce to lower latency if stable.
+FOREGROUND_DELAY = 0.1
+TRAY_CLICK_DELAY = 0.2
+UIA_RETRY_DELAY = 0.2
+
 # Template matching confidence; requires OpenCV if set < 1.0.
 MATCH_CONFIDENCE = 0.9
 
@@ -229,7 +234,7 @@ def bring_window_to_front(hwnd: int) -> Optional[int]:
         win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
         win32gui.BringWindowToTop(hwnd)
         win32gui.SetForegroundWindow(hwnd)
-        time.sleep(0.2)  # give Windows a moment
+        time.sleep(FOREGROUND_DELAY)
     except Exception as exc:  # pylint: disable=broad-except
         log(f"SetForegroundWindow failed: {exc}")
     return prev
@@ -442,7 +447,7 @@ def try_restore_from_tray() -> bool:
             if any(k in name for k in ["chevron", "overflow", "hidden", "notification"]):
                 try:
                     btn.click_input()
-                    time.sleep(0.2)
+                    time.sleep(TRAY_CLICK_DELAY)
                 except Exception:  # pylint: disable=broad-except
                     pass
                 break
@@ -477,7 +482,7 @@ def try_restore_from_tray() -> bool:
                     log(f"Tray icon click failed: {exc}")
                     continue
             log("Clicked tray icon to restore window.")
-            time.sleep(0.5)
+            time.sleep(TRAY_CLICK_DELAY)
             return True
 
     log("Tray icon not found.")
@@ -540,7 +545,7 @@ def try_restore_from_tray_win32() -> bool:
                 try:
                     btn.click_input()
                     log("Clicked tray icon via win32 toolbar.")
-                    time.sleep(0.5)
+                    time.sleep(TRAY_CLICK_DELAY)
                     return True
                 except Exception:  # pylint: disable=broad-except
                     continue
@@ -585,7 +590,7 @@ def try_restore_from_tray_uia_roots() -> bool:
                 try:
                     btn.click_input()
                     log(f"Clicked tray icon via UIA root: {cls}")
-                    time.sleep(0.5)
+                    time.sleep(TRAY_CLICK_DELAY)
                     return True
                 except Exception:  # pylint: disable=broad-except
                     continue
@@ -656,7 +661,7 @@ def try_restore_from_tray_overflow_uia() -> bool:
                 try:
                     btn.click_input()
                     log("Clicked tray icon via overflow window.")
-                    time.sleep(0.5)
+                    time.sleep(TRAY_CLICK_DELAY)
                     return True
                 except Exception:  # pylint: disable=broad-except
                     continue
@@ -676,7 +681,7 @@ def try_pause_accelerator() -> None:
 
         # If UIA failed, try to restore window by process and retry UIA.
         if restore_window_by_process(RAIDEN_PROCESS_NAME):
-            time.sleep(0.5)
+            time.sleep(UIA_RETRY_DELAY)
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -687,7 +692,7 @@ def try_pause_accelerator() -> None:
 
         # If UIA still failed, try UIA tray roots and retry UIA.
         if try_restore_from_tray_uia_roots():
-            time.sleep(0.5)
+            time.sleep(UIA_RETRY_DELAY)
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -698,7 +703,7 @@ def try_pause_accelerator() -> None:
 
         # If UIA still failed, try win32 tray restore and retry UIA.
         if try_restore_from_tray_win32():
-            time.sleep(0.5)
+            time.sleep(UIA_RETRY_DELAY)
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -709,7 +714,7 @@ def try_pause_accelerator() -> None:
 
         # If UIA still failed, try overflow chevron and retry UIA.
         if try_restore_from_tray_overflow_uia():
-            time.sleep(0.5)
+            time.sleep(UIA_RETRY_DELAY)
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -720,7 +725,7 @@ def try_pause_accelerator() -> None:
 
         # If UIA still failed, try to restore from tray and retry UIA before image matching.
         if try_restore_from_tray():
-            time.sleep(0.5)
+            time.sleep(UIA_RETRY_DELAY)
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -739,7 +744,7 @@ def try_pause_accelerator() -> None:
     hwnd = find_raiden_window()
     if not hwnd:
         if try_restore_from_tray():
-            time.sleep(0.5)
+            time.sleep(UIA_RETRY_DELAY)
             hwnd = find_raiden_window()
     region = None
     prev_foreground = None
