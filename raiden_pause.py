@@ -71,7 +71,7 @@ WINDOW_TITLE_KEYWORDS = ["雷神加速器", "Leishen", "Raiden"]
 RAIDEN_PROCESS_NAME = "leigod.exe"
 
 # Tray icon text keywords (used to restore from system tray).
-TRAY_ICON_KEYWORDS = ["雷神", "Leishen", "Raiden"]
+TRAY_ICON_KEYWORDS = ["雷神", "Leishen", "Raiden", "leigod"]
 
 # UI Automation button titles.
 UIA_PAUSE_TEXT = "暂停时长"
@@ -94,6 +94,8 @@ POLL_INTERVAL = 5
 # Template matching confidence; requires OpenCV if set < 1.0.
 MATCH_CONFIDENCE = 0.9
 
+# Debug: dump tray icon texts when not found.
+TRAY_DEBUG_DUMP = False
 # Paths to template images.
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
@@ -136,6 +138,45 @@ def get_process_pids(name: str) -> List[int]:
         if pname and pname.lower() == low:
             pids.append(proc.info["pid"])
     return pids
+
+
+def tray_name_matches(name: str) -> bool:
+    low = name.lower()
+    return any(kw.lower() in low for kw in TRAY_ICON_KEYWORDS)
+
+
+def restore_window_by_process(name: str) -> bool:
+    if not win32gui or not win32con:
+        return False
+    pids = set(get_process_pids(name))
+    if not pids:
+        return False
+    candidates: List[int] = []
+
+    def _enum_handler(hwnd, _):
+        try:
+            _, pid = win32gui.GetWindowThreadProcessId(hwnd)
+        except Exception:  # pylint: disable=broad-except
+            return
+        if pid in pids:
+            candidates.append(hwnd)
+
+    try:
+        win32gui.EnumWindows(_enum_handler, None)
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+    for hwnd in candidates:
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
+            win32gui.BringWindowToTop(hwnd)
+            return True
+        except Exception:  # pylint: disable=broad-except
+            continue
+    return False
 
 
 def find_raiden_window() -> Optional[int]:
@@ -349,17 +390,6 @@ def try_pause_via_uia() -> Optional[bool]:
                 return result
         except Exception as exc:  # pylint: disable=broad-except
             log(f"UI 自动化句柄连接失败 (handle={handle}): {exc}")
-    # Fallback: if only one title matches, try that handle.
-    handle = _pick_window_by_title(title_re)
-    if handle is not None:
-        try:
-            app = UIAApplication(backend="uia").connect(handle=handle, timeout=2)
-            win = app.window(handle=handle)
-            result = _try_pause_in_window(win)
-            if result is not None:
-                return result
-        except Exception as exc:  # pylint: disable=broad-except
-            log(f"UI 自动化句柄连接失败 (handle={handle}): {exc}")
     return None
 
 
@@ -368,9 +398,35 @@ def try_restore_from_tray() -> bool:
         log("未安装 pywinauto，无法从托盘恢复。")
         return False
 
-    def matches_name(name: str) -> bool:
-        low = name.lower()
-        return any(kw.lower() in low for kw in TRAY_ICON_KEYWORDS)
+    def get_button_text(btn) -> str:
+        parts: List[str] = []
+        try:
+            text = btn.window_text()
+            if text:
+                parts.append(text)
+        except Exception:  # pylint: disable=broad-except
+            pass
+        try:
+            name = getattr(btn.element_info, "name", "")
+            if name:
+                parts.append(name)
+        except Exception:  # pylint: disable=broad-except
+            pass
+        try:
+            help_text = getattr(btn.element_info, "help_text", "")
+            if help_text:
+                parts.append(help_text)
+        except Exception:  # pylint: disable=broad-except
+            pass
+        try:
+            legacy = btn.legacy_properties()
+            for key in ("Name", "Value", "Help"):
+                value = legacy.get(key)
+                if value:
+                    parts.append(value)
+        except Exception:  # pylint: disable=broad-except
+            pass
+        return " ".join(parts)
 
     try:
         desktop = UIADesktop(backend="uia")
@@ -405,11 +461,13 @@ def try_restore_from_tray() -> bool:
     except Exception:  # pylint: disable=broad-except
         pass
 
+    dumped: List[str] = []
     for btn in candidates:
-        name = btn.window_text() or getattr(btn.element_info, "name", "") or ""
+        name = get_button_text(btn)
         if not name:
             continue
-        if matches_name(name):
+        dumped.append(name)
+        if tray_name_matches(name):
             try:
                 btn.double_click_input()
             except Exception:  # pylint: disable=broad-except
@@ -426,6 +484,185 @@ def try_restore_from_tray() -> bool:
     return False
 
 
+def try_restore_from_tray_win32() -> bool:
+    if not UIADesktop:
+        log("未安装 pywinauto，无法从托盘恢复。")
+        return False
+    if not win32gui:
+        return False
+    try:
+        desktop = UIADesktop(backend="win32")
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+    toolbars = []
+    try:
+        taskbar = desktop.window(class_name="Shell_TrayWnd")
+        tray = taskbar.child_window(class_name="TrayNotifyWnd")
+        pager = tray.child_window(class_name="SysPager")
+        toolbars.append(pager.child_window(class_name="ToolbarWindow32"))
+    except Exception:  # pylint: disable=broad-except
+        pass
+    try:
+        overflow = desktop.window(class_name="NotifyIconOverflowWindow")
+        toolbars.append(overflow.child_window(class_name="ToolbarWindow32"))
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    dumped: List[str] = []
+    for toolbar in toolbars:
+        try:
+            count = toolbar.button_count()
+        except Exception:  # pylint: disable=broad-except
+            continue
+        for i in range(count):
+            try:
+                btn = toolbar.get_button(i)
+            except Exception:  # pylint: disable=broad-except
+                continue
+            texts: List[str] = []
+            try:
+                text = btn.text()
+                if text:
+                    texts.append(text)
+            except Exception:  # pylint: disable=broad-except
+                pass
+            try:
+                texts.extend([t for t in btn.texts() if t])
+            except Exception:  # pylint: disable=broad-except
+                pass
+            name = " ".join(texts)
+            if name:
+                dumped.append(name)
+            if not name:
+                continue
+            if tray_name_matches(name):
+                try:
+                    btn.click_input()
+                    log("Clicked tray icon via win32 toolbar.")
+                    time.sleep(0.5)
+                    return True
+                except Exception:  # pylint: disable=broad-except
+                    continue
+    return False
+
+
+def try_restore_from_tray_uia_roots() -> bool:
+    if not UIADesktop:
+        log("未安装 pywinauto，无法从托盘恢复。")
+        return False
+    root_classes = [
+        "SystemTray_Main",
+        "CTrayUIMgr_ClassName",
+        "Electron_NotifyIconHostWindow",
+        "Chrome_StatusTrayWindow",
+        "Chrome_StatusTrayWindow21024125",
+        "WPETrayWindow",
+        "Qt51514WxTrayIconMessageWindowClass",
+        "Qt51513TrayIconMessageWindowClass",
+    ]
+    desktop = UIADesktop(backend="uia")
+    for cls in root_classes:
+        try:
+            win = desktop.window(class_name=cls)
+        except Exception:  # pylint: disable=broad-except
+            continue
+        if not win.exists(timeout=0.5):
+            continue
+        try:
+            buttons = win.descendants(control_type="Button")
+        except Exception:  # pylint: disable=broad-except
+            buttons = []
+        dumped: List[str] = []
+        for btn in buttons:
+            try:
+                name = btn.window_text() or getattr(btn.element_info, "name", "") or ""
+            except Exception:  # pylint: disable=broad-except
+                name = ""
+            if name:
+                dumped.append(name)
+            if name and tray_name_matches(name):
+                try:
+                    btn.click_input()
+                    log(f"Clicked tray icon via UIA root: {cls}")
+                    time.sleep(0.5)
+                    return True
+                except Exception:  # pylint: disable=broad-except
+                    continue
+    return False
+
+
+def try_restore_from_tray_overflow_uia() -> bool:
+    if not UIAApplication or not UIADesktop:
+        log("未安装 pywinauto，无法从托盘恢复。")
+        return False
+
+    try:
+        app = UIAApplication(backend="uia").connect(path="explorer.exe")
+        taskbar = app.window(class_name="Shell_TrayWnd")
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+    clicked = False
+    try:
+        try:
+            taskbar["显示隐藏的图标"].wrapper_object().click()
+            clicked = True
+        except Exception:  # pylint: disable=broad-except
+            chevron_keywords = [
+                "notification chevron",
+                "notification",
+                "chevron",
+                "overflow",
+                "隐藏",
+                "通知区域",
+            ]
+            for btn in taskbar.descendants(control_type="Button"):
+                name = (btn.window_text() or getattr(btn.element_info, "name", "") or "").lower()
+                if not name:
+                    continue
+                if any(k in name for k in chevron_keywords):
+                    try:
+                        btn.click_input()
+                        clicked = True
+                        break
+                    except Exception:  # pylint: disable=broad-except
+                        continue
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+    if not clicked:
+        return False
+
+    try:
+        overflow = UIADesktop(backend="uia").window(class_name="NotifyIconOverflowWindow")
+        has_overflow = overflow.exists(timeout=1)
+    except Exception:  # pylint: disable=broad-except
+        has_overflow = False
+
+    containers = [overflow] if has_overflow else [taskbar]
+    for container in containers:
+        try:
+            buttons = container.descendants(control_type="Button")
+        except Exception:  # pylint: disable=broad-except
+            buttons = []
+        for btn in buttons:
+            try:
+                name = btn.window_text() or getattr(btn.element_info, "name", "") or ""
+            except Exception:  # pylint: disable=broad-except
+                name = ""
+            text_blob = f"{name} {btn!s}".lower()
+            if name and tray_name_matches(name) or tray_name_matches(text_blob):
+                try:
+                    btn.click_input()
+                    log("Clicked tray icon via overflow window.")
+                    time.sleep(0.5)
+                    return True
+                except Exception:  # pylint: disable=broad-except
+                    continue
+    return False
+
+
 def try_pause_accelerator() -> None:
     log("Trying to pause accelerator...")
     try:
@@ -437,7 +674,51 @@ def try_pause_accelerator() -> None:
             notify("雷神加速器", "看起来已经暂停，无需操作。")
             return
 
-        # If UIA failed, try to restore from tray and retry UIA before image matching.
+        # If UIA failed, try to restore window by process and retry UIA.
+        if restore_window_by_process(RAIDEN_PROCESS_NAME):
+            time.sleep(0.5)
+            uia_result = try_pause_via_uia()
+            if uia_result is True:
+                notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
+                return
+            if uia_result is False:
+                notify("雷神加速器", "看起来已经暂停，无需操作。")
+                return
+
+        # If UIA still failed, try UIA tray roots and retry UIA.
+        if try_restore_from_tray_uia_roots():
+            time.sleep(0.5)
+            uia_result = try_pause_via_uia()
+            if uia_result is True:
+                notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
+                return
+            if uia_result is False:
+                notify("雷神加速器", "看起来已经暂停，无需操作。")
+                return
+
+        # If UIA still failed, try win32 tray restore and retry UIA.
+        if try_restore_from_tray_win32():
+            time.sleep(0.5)
+            uia_result = try_pause_via_uia()
+            if uia_result is True:
+                notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
+                return
+            if uia_result is False:
+                notify("雷神加速器", "看起来已经暂停，无需操作。")
+                return
+
+        # If UIA still failed, try overflow chevron and retry UIA.
+        if try_restore_from_tray_overflow_uia():
+            time.sleep(0.5)
+            uia_result = try_pause_via_uia()
+            if uia_result is True:
+                notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
+                return
+            if uia_result is False:
+                notify("雷神加速器", "看起来已经暂停，无需操作。")
+                return
+
+        # If UIA still failed, try to restore from tray and retry UIA before image matching.
         if try_restore_from_tray():
             time.sleep(0.5)
             uia_result = try_pause_via_uia()
