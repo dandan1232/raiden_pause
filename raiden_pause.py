@@ -95,6 +95,11 @@ POLL_INTERVAL = 5
 FOREGROUND_DELAY = 0.1
 TRAY_CLICK_DELAY = 0.2
 UIA_RETRY_DELAY = 0.2
+UIA_BUTTON_TIMEOUT = 0.3
+
+# Screenshot matching tuning.
+ENABLE_UNSTART_CHECK = False
+LAST_BUTTON_REGION = None  # type: Optional[Tuple[int, int, int, int]]
 
 # Template matching confidence; requires OpenCV if set < 1.0.
 MATCH_CONFIDENCE = 0.9
@@ -293,6 +298,14 @@ def click_center(box: PyAutoGuiBox) -> bool:
         return False
 
 
+def update_last_region(box: PyAutoGuiBox) -> None:
+    global LAST_BUTTON_REGION
+    try:
+        LAST_BUTTON_REGION = (box.left, box.top, box.width, box.height)
+    except Exception:  # pylint: disable=broad-except
+        LAST_BUTTON_REGION = None
+
+
 def _try_pause_in_window(win) -> Optional[bool]:
     try:
         win.restore()
@@ -304,7 +317,7 @@ def _try_pause_in_window(win) -> Optional[bool]:
         pass
 
     pause_btn = win.child_window(title=UIA_PAUSE_TEXT, control_type="Button")
-    if pause_btn.exists(timeout=1):
+    if pause_btn.exists(timeout=UIA_BUTTON_TIMEOUT):
         try:
             pause_btn.invoke()
         except Exception:  # pylint: disable=broad-except
@@ -313,7 +326,7 @@ def _try_pause_in_window(win) -> Optional[bool]:
         return True
 
     start_btn = win.child_window(title=UIA_START_TEXT, control_type="Button")
-    if start_btn.exists(timeout=1):
+    if start_btn.exists(timeout=UIA_BUTTON_TIMEOUT):
         log("UI 自动化检测到“开启时长”，看起来已暂停。")
         return False
     return None
@@ -772,20 +785,25 @@ def try_pause_accelerator() -> None:
         prev_foreground = bring_window_to_front(hwnd)
 
     try:
-        box = locate_button([START_BUTTON], region=region)
+        box = None
+        if LAST_BUTTON_REGION:
+            box = locate_button([START_BUTTON], region=LAST_BUTTON_REGION)
+        if not box:
+            box = locate_button([START_BUTTON], region=region)
         if box:
+            update_last_region(box)
             if click_center(box):
                 notify("雷神加速器", "检测到游戏关闭，已尝试点击“暂停时长”。")
             else:
                 notify("雷神加速器", "按钮找到但点击失败，请手动暂停。")
             return
 
-        # If only unstart/gray button is visible, it likely is already paused.
-        box_unstart = locate_button([UNSTART_BUTTON], region=region)
-        if box_unstart:
-            log("Looks already paused (gray button visible).")
-            notify("雷神加速器", "看起来已经暂停，无需操作。")
-            return
+        if ENABLE_UNSTART_CHECK:
+            box_unstart = locate_button([UNSTART_BUTTON], region=region)
+            if box_unstart:
+                log("Looks already paused (gray button visible).")
+                notify("雷神加速器", "看起来已经暂停，无需操作。")
+                return
 
         if hwnd:
             notify("雷神加速器", "未找到按钮，尝试把雷神窗口切到前台再试一次。")
