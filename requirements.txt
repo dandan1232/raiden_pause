@@ -1,0 +1,7 @@
+psutil
+pyautogui
+pillow
+opencv-python
+win10toast
+pywinauto
+pywin32

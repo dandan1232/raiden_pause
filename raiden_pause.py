@@ -2,7 +2,7 @@
 Simple watchdog to pause Leishen Accelerator when games/Steam exit.
 
 Requirements (install in your venv):
-  pip install psutil pyautogui pillow opencv-python win10toast
+  pip install psutil pyautogui pillow opencv-python win10toast pywinauto pywin32
 
 Behavior:
 - Polls for configured game processes (or Steam) every few seconds.
@@ -21,6 +21,7 @@ Optionally register as a startup task or launch alongside Steam.
 """
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -41,6 +42,12 @@ if TYPE_CHECKING:
     from pyautogui import Box as PyAutoGuiBox
 else:
     PyAutoGuiBox = Any
+try:
+    from pywinauto import Application as UIAApplication
+    from pywinauto import Desktop as UIADesktop
+except ImportError:
+    UIAApplication = None
+    UIADesktop = None
 
 try:
     from win10toast import ToastNotifier
@@ -58,7 +65,17 @@ except ImportError:
 # ---- Configuration ----
 
 # Window title keywords to locate Leishen; adjust if你的标题不同.
-WINDOW_TITLE_KEYWORDS = ["雷神加速器"]
+WINDOW_TITLE_KEYWORDS = ["雷神加速器", "Leishen", "Raiden"]
+
+# Main process name for Leigod/Raiden (used for UIA fallback when minimized).
+RAIDEN_PROCESS_NAME = "leigod.exe"
+
+# Tray icon text keywords (used to restore from system tray).
+TRAY_ICON_KEYWORDS = ["雷神", "Leishen", "Raiden"]
+
+# UI Automation button titles.
+UIA_PAUSE_TEXT = "暂停时长"
+UIA_START_TEXT = "开启时长"
 
 # Add/adjust process names (lowercase). If any are running, we consider "in game".
 WATCH_PROCESSES = {
@@ -111,19 +128,31 @@ def any_process_running(names: Iterable[str]) -> bool:
     return False
 
 
+def get_process_pids(name: str) -> List[int]:
+    pids: List[int] = []
+    low = name.lower()
+    for proc in psutil.process_iter(["name", "pid"]):
+        pname = proc.info.get("name")
+        if pname and pname.lower() == low:
+            pids.append(proc.info["pid"])
+    return pids
+
+
 def find_raiden_window() -> Optional[int]:
     if not win32gui:
         return None
-    matches: List[int] = []
+    visible: List[int] = []
+    hidden: List[int] = []
 
     def _enum_handler(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
         title = win32gui.GetWindowText(hwnd) or ""
         low = title.lower()
         for kw in WINDOW_TITLE_KEYWORDS:
             if kw.lower() in low:
-                matches.append(hwnd)
+                if win32gui.IsWindowVisible(hwnd):
+                    visible.append(hwnd)
+                else:
+                    hidden.append(hwnd)
                 break
 
     try:
@@ -131,7 +160,9 @@ def find_raiden_window() -> Optional[int]:
     except Exception as exc:  # pylint: disable=broad-except
         log(f"EnumWindows failed: {exc}")
         return None
-    return matches[0] if matches else None
+    if visible:
+        return visible[0]
+    return hidden[0] if hidden else None
 
 
 def get_window_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
@@ -151,7 +182,11 @@ def bring_window_to_front(hwnd: int) -> Optional[int]:
         return None
     prev = win32gui.GetForegroundWindow()
     try:
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
+        win32gui.BringWindowToTop(hwnd)
         win32gui.SetForegroundWindow(hwnd)
         time.sleep(0.2)  # give Windows a moment
     except Exception as exc:  # pylint: disable=broad-except
@@ -212,13 +247,219 @@ def click_center(box: PyAutoGuiBox) -> bool:
         return False
 
 
+def _try_pause_in_window(win) -> Optional[bool]:
+    try:
+        win.restore()
+    except Exception:  # pylint: disable=broad-except
+        pass
+    try:
+        win.set_focus()
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    pause_btn = win.child_window(title=UIA_PAUSE_TEXT, control_type="Button")
+    if pause_btn.exists(timeout=1):
+        try:
+            pause_btn.invoke()
+        except Exception:  # pylint: disable=broad-except
+            pause_btn.click_input()
+        log("通过 UI 自动化已点击“暂停时长”。")
+        return True
+
+    start_btn = win.child_window(title=UIA_START_TEXT, control_type="Button")
+    if start_btn.exists(timeout=1):
+        log("UI 自动化检测到“开启时长”，看起来已暂停。")
+        return False
+    return None
+
+
+def _window_title_matches(title: str) -> bool:
+    low = title.lower()
+    return any(kw.lower() in low for kw in WINDOW_TITLE_KEYWORDS)
+
+
+def _pick_handle_from_windows(wins: List[Any]) -> Optional[int]:
+    for win in wins:
+        try:
+            title = win.window_text()
+        except Exception:  # pylint: disable=broad-except
+            title = ""
+        if title and _window_title_matches(title):
+            try:
+                return win.handle
+            except Exception:  # pylint: disable=broad-except
+                return None
+    # Fallback to the first window handle.
+    for win in wins:
+        try:
+            return win.handle
+        except Exception:  # pylint: disable=broad-except
+            continue
+    return None
+
+
+def _pick_window_by_process() -> Optional[int]:
+    if not UIADesktop:
+        return None
+    pids = get_process_pids(RAIDEN_PROCESS_NAME)
+    if not pids:
+        return None
+    desktop = UIADesktop(backend="uia")
+    for pid in pids:
+        try:
+            wins = desktop.windows(process=pid, visible_only=False)
+        except Exception:  # pylint: disable=broad-except
+            continue
+        handle = _pick_handle_from_windows(wins)
+        if handle is not None:
+            return handle
+    return None
+
+
+def _pick_window_by_title(title_re: str) -> Optional[int]:
+    if not UIADesktop:
+        return None
+    try:
+        wins = UIADesktop(backend="uia").windows(title_re=title_re, visible_only=False)
+    except Exception:  # pylint: disable=broad-except
+        return None
+    if len(wins) != 1:
+        return None
+    try:
+        return wins[0].handle
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def try_pause_via_uia() -> Optional[bool]:
+    if not UIAApplication:
+        log("未安装 pywinauto，无法使用 UI 自动化。")
+        return None
+    if not WINDOW_TITLE_KEYWORDS:
+        return None
+    title_re = ".*(" + "|".join(re.escape(k) for k in WINDOW_TITLE_KEYWORDS) + ").*"
+    # Prefer process-based discovery to avoid multiple title matches.
+    handle = _pick_window_by_process()
+    if handle is not None:
+        try:
+            app = UIAApplication(backend="uia").connect(handle=handle, timeout=2)
+            win = app.window(handle=handle)
+            result = _try_pause_in_window(win)
+            if result is not None:
+                return result
+        except Exception as exc:  # pylint: disable=broad-except
+            log(f"UI 自动化句柄连接失败 (handle={handle}): {exc}")
+    # Fallback: if only one title matches, try that handle.
+    handle = _pick_window_by_title(title_re)
+    if handle is not None:
+        try:
+            app = UIAApplication(backend="uia").connect(handle=handle, timeout=2)
+            win = app.window(handle=handle)
+            result = _try_pause_in_window(win)
+            if result is not None:
+                return result
+        except Exception as exc:  # pylint: disable=broad-except
+            log(f"UI 自动化句柄连接失败 (handle={handle}): {exc}")
+    return None
+
+
+def try_restore_from_tray() -> bool:
+    if not UIADesktop:
+        log("未安装 pywinauto，无法从托盘恢复。")
+        return False
+
+    def matches_name(name: str) -> bool:
+        low = name.lower()
+        return any(kw.lower() in low for kw in TRAY_ICON_KEYWORDS)
+
+    try:
+        desktop = UIADesktop(backend="uia")
+        taskbar = desktop.window(class_name="Shell_TrayWnd")
+    except Exception as exc:  # pylint: disable=broad-except
+        log(f"Tray lookup failed: {exc}")
+        return False
+
+    # Try to open the overflow area if it exists.
+    try:
+        for btn in taskbar.descendants(control_type="Button"):
+            name = (btn.window_text() or "").lower()
+            if any(k in name for k in ["chevron", "overflow", "hidden", "notification"]):
+                try:
+                    btn.click_input()
+                    time.sleep(0.2)
+                except Exception:  # pylint: disable=broad-except
+                    pass
+                break
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    candidates = []
+    try:
+        for toolbar in taskbar.descendants(control_type="Toolbar"):
+            candidates.extend(toolbar.descendants(control_type="Button"))
+    except Exception:  # pylint: disable=broad-except
+        pass
+    try:
+        overflow = desktop.window(class_name="NotifyIconOverflowWindow")
+        candidates.extend(overflow.descendants(control_type="Button"))
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    for btn in candidates:
+        name = btn.window_text() or getattr(btn.element_info, "name", "") or ""
+        if not name:
+            continue
+        if matches_name(name):
+            try:
+                btn.double_click_input()
+            except Exception:  # pylint: disable=broad-except
+                try:
+                    btn.click_input()
+                except Exception as exc:  # pylint: disable=broad-except
+                    log(f"Tray icon click failed: {exc}")
+                    continue
+            log("Clicked tray icon to restore window.")
+            time.sleep(0.5)
+            return True
+
+    log("Tray icon not found.")
+    return False
+
+
 def try_pause_accelerator() -> None:
     log("Trying to pause accelerator...")
-    if not pyautogui:
-        notify("雷神加速器", "未安装 pyautogui，无法自动点击，请手动暂停。")
+    try:
+        uia_result = try_pause_via_uia()
+        if uia_result is True:
+            notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
+            return
+        if uia_result is False:
+            notify("雷神加速器", "看起来已经暂停，无需操作。")
+            return
+
+        # If UIA failed, try to restore from tray and retry UIA before image matching.
+        if try_restore_from_tray():
+            time.sleep(0.5)
+            uia_result = try_pause_via_uia()
+            if uia_result is True:
+                notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
+                return
+            if uia_result is False:
+                notify("雷神加速器", "看起来已经暂停，无需操作。")
+                return
+        if not pyautogui:
+            notify("雷神加速器", "未安装 pyautogui，无法自动点击，请手动暂停。")
+            return
+    except Exception as exc:  # pylint: disable=broad-except
+        log(f"暂停流程异常: {exc}")
+        notify("雷神加速器", "暂停流程异常，稍后将重试。")
         return
 
     hwnd = find_raiden_window()
+    if not hwnd:
+        if try_restore_from_tray():
+            time.sleep(0.5)
+            hwnd = find_raiden_window()
     region = None
     prev_foreground = None
     if hwnd:

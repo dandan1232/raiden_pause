@@ -17,7 +17,7 @@
 依赖：
 
 ```
-pip install psutil pyautogui pillow opencv-python win10toast pywin32
+pip install psutil pyautogui pillow opencv-python win10toast pywin32 pywinauto
 ```
 
 ## 资源文件
@@ -35,6 +35,10 @@ pip install psutil pyautogui pillow opencv-python win10toast pywin32
 
 ```
 python raiden_pause.py
+```
+
+```cmd
+D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
 ```
 
 建议加入开机自启或随 Steam 启动。
