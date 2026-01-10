@@ -671,6 +671,7 @@ def try_restore_from_tray_overflow_uia() -> bool:
 def try_pause_accelerator() -> None:
     log("Trying to pause accelerator...")
     try:
+        log("步骤：UIA 按进程直接查找")
         uia_result = try_pause_via_uia()
         if uia_result is True:
             notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -680,8 +681,10 @@ def try_pause_accelerator() -> None:
             return
 
         # If UIA failed, try to restore window by process and retry UIA.
+        log("步骤：按进程恢复窗口")
         if restore_window_by_process(RAIDEN_PROCESS_NAME):
             time.sleep(UIA_RETRY_DELAY)
+            log("步骤：进程恢复后重试 UIA")
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -691,8 +694,10 @@ def try_pause_accelerator() -> None:
                 return
 
         # If UIA still failed, try UIA tray roots and retry UIA.
+        log("步骤：UIA 托盘根窗口")
         if try_restore_from_tray_uia_roots():
             time.sleep(UIA_RETRY_DELAY)
+            log("步骤：托盘根窗口后重试 UIA")
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -702,8 +707,10 @@ def try_pause_accelerator() -> None:
                 return
 
         # If UIA still failed, try win32 tray restore and retry UIA.
+        log("步骤：Win32 托盘恢复")
         if try_restore_from_tray_win32():
             time.sleep(UIA_RETRY_DELAY)
+            log("步骤：Win32 托盘后重试 UIA")
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -713,8 +720,10 @@ def try_pause_accelerator() -> None:
                 return
 
         # If UIA still failed, try overflow chevron and retry UIA.
+        log("步骤：展开隐藏图标托盘")
         if try_restore_from_tray_overflow_uia():
             time.sleep(UIA_RETRY_DELAY)
+            log("步骤：展开隐藏图标后重试 UIA")
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
@@ -724,8 +733,10 @@ def try_pause_accelerator() -> None:
                 return
 
         # If UIA still failed, try to restore from tray and retry UIA before image matching.
+        log("步骤：通用 UIA 托盘")
         if try_restore_from_tray():
             time.sleep(UIA_RETRY_DELAY)
+            log("步骤：通用托盘后重试 UIA")
             uia_result = try_pause_via_uia()
             if uia_result is True:
                 notify("雷神加速器", "用 UI Automation 已尝试点击“暂停时长”。")
