@@ -2,7 +2,7 @@
 Simple watchdog to pause Leishen Accelerator when games/Steam exit.
 
 Requirements (install in your venv):
-  pip install psutil pyautogui pillow opencv-python win10toast pywinauto pywin32 wmi
+  pip install psutil pyautogui pillow opencv-python win10toast pywinauto pywin32 wmi winsdk
 
 Behavior:
 - Polls for configured game processes (or Steam) every few seconds.
@@ -23,6 +23,7 @@ Optionally register as a startup task or launch alongside Steam.
 import os
 import sys
 import time
+import html
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple, TYPE_CHECKING, Any
 
@@ -56,6 +57,25 @@ try:
     from win10toast import ToastNotifier
 except ImportError:
     ToastNotifier = None
+
+TOAST_BACKEND = None
+try:
+    from winsdk.windows.ui.notifications import ToastNotificationManager, ToastNotification
+    from winsdk.windows.data.xml.dom import XmlDocument
+    TOAST_BACKEND = "winsdk"
+except ImportError:
+    try:
+        from winrt.windows.ui.notifications import ToastNotificationManager, ToastNotification
+        from winrt.windows.data.xml.dom import XmlDocument
+        TOAST_BACKEND = "winrt"
+    except ImportError:
+        ToastNotificationManager = None
+        ToastNotification = None
+        XmlDocument = None
+
+TOAST_SDK_AVAILABLE = all((ToastNotificationManager, ToastNotification, XmlDocument))
+TOAST_FALLBACK_LOGGED = False
+TOAST_ERROR_LOGGED = False
 
 try:
     import win32con
@@ -111,9 +131,17 @@ MATCH_CONFIDENCE = 0.9
 
 # Debug: dump tray icon texts when not found.
 TRAY_DEBUG_DUMP = False
+# Debug: log notify calls.
+NOTIFY_DEBUG = True
+# Debug: send a test toast on startup.
+NOTIFY_SELF_TEST = True
 # Paths to template images.
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
+TOAST_APP_ID = "RaidenPause.NotEatTime"
+TOAST_SHORTCUT_NAME = "\u4e0d\u51c6\u5403\u6211\u65f6\u957f"
+TOAST_ICON_ICO = ASSETS_DIR / "logo.ico"
+TOAST_ICON_PNG = ASSETS_DIR / "logo.png"
 START_BUTTON = ASSETS_DIR / "start_button.png"     # red “暂停时长”
 UNSTART_BUTTON = ASSETS_DIR / "unstart_button.png" # gray “开启时长” (used for detection only)
 
@@ -125,10 +153,145 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}")
 
 
+def xml_escape(text: str) -> str:
+    return html.escape(text, quote=True)
+
+
+def set_current_process_app_id() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:  # pylint: disable=broad-except
+        return
+    try:
+        set_app_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        set_app_id.argtypes = [wintypes.LPCWSTR]
+        set_app_id.restype = ctypes.HRESULT
+        hr = set_app_id(TOAST_APP_ID)
+        if NOTIFY_DEBUG and hr not in (0, None):
+            log(f"SetCurrentProcessExplicitAppUserModelID failed: 0x{hr & 0xFFFFFFFF:08X}")
+    except Exception:  # pylint: disable=broad-except
+        return
+
+
+def register_toast_app_id() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import winreg
+    except Exception:  # pylint: disable=broad-except
+        return
+
+    icon_uri = None
+    if TOAST_ICON_ICO.exists():
+        icon_uri = TOAST_ICON_ICO.resolve().as_uri()
+    key_path = f"Software\\Classes\\AppUserModelId\\{TOAST_APP_ID}"
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, TOAST_SHORTCUT_NAME)
+            if icon_uri:
+                winreg.SetValueEx(key, "IconUri", 0, winreg.REG_SZ, icon_uri)
+    except Exception:  # pylint: disable=broad-except
+        return
+
+
+def ensure_toast_shortcut() -> None:
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return
+    shortcut_dir = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    shortcut_path = shortcut_dir / f"{TOAST_SHORTCUT_NAME}.lnk"
+    try:
+        shortcut_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:  # pylint: disable=broad-except
+        return
+
+    try:
+        from win32com.client import Dispatch  # type: ignore
+        from win32com.propsys import propsys, pscon  # type: ignore
+    except Exception:  # pylint: disable=broad-except
+        return
+
+    try:
+        shell = Dispatch("WScript.Shell")
+        shortcut = shell.CreateShortCut(str(shortcut_path))
+        shortcut.Targetpath = sys.executable
+        shortcut.Arguments = f"\"{Path(__file__).resolve()}\""
+        shortcut.WorkingDirectory = str(BASE_DIR)
+        if TOAST_ICON_ICO.exists():
+            shortcut.IconLocation = str(TOAST_ICON_ICO.resolve())
+        shortcut.save()
+        try:
+            store = propsys.SHGetPropertyStoreFromParsingName(
+                str(shortcut_path),
+                None,
+                propsys.GPS_READWRITE,
+            )
+            store.SetValue(pscon.PKEY_AppUserModel_ID, TOAST_APP_ID)
+            store.Commit()
+        except Exception:  # pylint: disable=broad-except
+            pass
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+
+def notify_winrt(title: str, msg: str) -> bool:
+    if not TOAST_SDK_AVAILABLE:
+        return False
+    set_current_process_app_id()
+    register_toast_app_id()
+    ensure_toast_shortcut()
+    image_tag = ""
+    icon_path = TOAST_ICON_PNG if TOAST_ICON_PNG.exists() else TOAST_ICON_ICO
+    if icon_path.exists():
+        image_tag = (
+            '<image placement="appLogoOverride" hint-crop="circle" '
+            f'src="{icon_path.resolve().as_uri()}"/>'
+        )
+    toast_xml = (
+        "<toast>"
+        "<visual>"
+        "<binding template=\"ToastGeneric\">"
+        f"<text>{xml_escape(title)}</text>"
+        f"<text>{xml_escape(msg)}</text>"
+        f"{image_tag}"
+        "</binding>"
+        "</visual>"
+        "</toast>"
+    )
+    try:
+        doc = XmlDocument()
+        doc.load_xml(toast_xml)
+        notifier = ToastNotificationManager.create_toast_notifier(TOAST_APP_ID)
+        notifier.show(ToastNotification(doc))
+        if NOTIFY_DEBUG:
+            log(f"Win toast sent via {TOAST_BACKEND}.")
+        return True
+    except Exception as exc:  # pylint: disable=broad-except
+        global TOAST_ERROR_LOGGED
+        if not TOAST_ERROR_LOGGED:
+            log(f"Windows toast failed: {exc}")
+            TOAST_ERROR_LOGGED = True
+        return False
+
+
 def notify(title: str, msg: str) -> None:
+    global TOAST_FALLBACK_LOGGED
+    if NOTIFY_DEBUG:
+        log(f"Notify call: {title} - {msg}")
+    if notify_winrt(title, msg):
+        return
+    if not TOAST_SDK_AVAILABLE and not TOAST_FALLBACK_LOGGED:
+        log("Windows toast SDK unavailable; using win10toast fallback.")
+        TOAST_FALLBACK_LOGGED = True
     if ToastNotifier:
         try:
-            ToastNotifier().show_toast(title, msg, duration=5, threaded=True)
+            icon_path = None
+            if TOAST_ICON_ICO.exists():
+                icon_path = str(TOAST_ICON_ICO)
+            ToastNotifier().show_toast(title, msg, icon_path=icon_path, duration=5, threaded=True)
             return
         except Exception as exc:  # pylint: disable=broad-except
             log(f"Toast failed: {exc}")
@@ -724,6 +887,13 @@ def main() -> None:
     if not ASSETS_DIR.exists():
         log(f"Assets folder missing: {ASSETS_DIR}")
         sys.exit(1)
+
+    set_current_process_app_id()
+    if TOAST_SDK_AVAILABLE:
+        register_toast_app_id()
+        ensure_toast_shortcut()
+        if NOTIFY_SELF_TEST:
+            notify("❤酱酱酱~~", "hi~~我来啦！！祝你今天全win！！")
 
     log("Raiden pause watcher started.")
     log(f"Watching processes: {sorted(WATCH_PROCESSES)}")

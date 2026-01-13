@@ -6,3 +6,4 @@ win10toast
 pywinauto
 pywin32
 wmi
+winsdk

@@ -18,7 +18,7 @@
 依赖：
 
 ```
-pip install psutil pyautogui pillow opencv-python win10toast pywin32 pywinauto wmi
+pip install psutil pyautogui pillow opencv-python win10toast pywin32 pywinauto wmi winsdk
 ```
 
 > 记得要在本地安装这些依赖，如： D:\Python\Python311\python.exe -m pip install win10toast
@@ -29,6 +29,7 @@ pip install psutil pyautogui pillow opencv-python win10toast pywin32 pywinauto w
 
 - `assets/start_button.png`：加速中（红色“暂停时长”）
 - `assets/unstart_button.png`：已暂停（灰色“开启时长”）
+- `assets/logo.ico`/`assets/logo.png`：通知图标（WinRT 优先使用 PNG）
 
 可按需补充全屏截图用于调试（非必需）。
 
@@ -58,6 +59,7 @@ D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
 - `POLL_INTERVAL`：轮询间隔（秒）
 - `WMI_TIMEOUT_MS`：WMI 事件等待超时（毫秒）
 - `WMI_ERROR_LIMIT`：WMI 连续错误阈值（超过后回退到轮询）
+- `TOAST_APP_ID`：Windows 通知显示名（左上角应用名）
 - `MATCH_CONFIDENCE`：模板匹配阈值
 
 ## 使用方法
@@ -107,6 +109,8 @@ D:\Python\Python311\python.exe -c "import cv2; print(cv2.__version__)"
 - 没有点击动作：检查是否有安全软件/权限拦截；可尝试以普通用户权限运行。
 - 一直不触发：确认 `WATCH_PROCESSES` 中的进程名与实际 exe 一致（小写）。
 - WMI 报错或无效：请先安装 `wmi`/`pywin32`，仍异常会自动回退到轮询。
+- 通知仍显示 Python：安装 `winsdk` 后可用自定义应用名；缺少 `winsdk` 会回退到 win10toast。
+- 通知图标/名称未更新：首次运行会创建开始菜单快捷方式；若仍异常，删除开始菜单中同名快捷方式后重试。
 
 ## 调试工具
 
@@ -120,6 +124,6 @@ D:\Python\Python311\python.exe -c "import cv2; print(cv2.__version__)"
 
 
 ## 截图
-![img.png](img.png)
-![img_1.png](img_1.png)
-![img_2.png](img_2.png)
+![img_5.png](img_5.png)
+![img_4.png](img_4.png)
+![img_3.png](img_3.png)
