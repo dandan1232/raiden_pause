@@ -10,6 +10,15 @@
 - 使用固定区域截图匹配“暂停时长”按钮并点击
 - Windows 通知提示执行结果
 
+## 更新记录
+
+- 进程监听改为 WMI 事件驱动，异常时自动回退轮询，降低 CPU 占用。
+- 通知改用 Windows SDK（winsdk）发送，支持自定义应用名与图标；不可用时回退 win10toast。
+- 新增 AppUserModelID 注册与开始菜单快捷方式，确保通知左上角显示“不准吃我时长”与自定义图标。
+- 新增通知图标资源：`assets/logo.ico` / `assets/logo.png`。
+- 依赖新增 `winsdk`（`winrt` 在 Python 3.11 上无可用发行版，因此改用 winsdk）。
+
+
 ## 环境要求
 
 - 仅支持 Windows 10/11（依赖 Win32 API 与桌面截图）
@@ -111,6 +120,7 @@ D:\Python\Python311\python.exe -c "import cv2; print(cv2.__version__)"
 - WMI 报错或无效：请先安装 `wmi`/`pywin32`，仍异常会自动回退到轮询。
 - 通知仍显示 Python：安装 `winsdk` 后可用自定义应用名；缺少 `winsdk` 会回退到 win10toast。
 - 通知图标/名称未更新：首次运行会创建开始菜单快捷方式；若仍异常，删除开始菜单中同名快捷方式后重试。
+- QA：为什么不用 `winrt`？因为 `winrt` 在 Python 3.11 上没有可用发行版；`winsdk` 可在 Py3.11 安装并提供同样的 WinRT 通知能力。
 
 ## 调试工具
 
