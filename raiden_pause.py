@@ -177,8 +177,14 @@ def restore_window_by_process(name: str) -> bool:
             win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
             if win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
-            win32gui.BringWindowToTop(hwnd)
+            try:
+                win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
+            except (TypeError, Exception):  # pylint: disable=broad-except
+                pass
+            try:
+                win32gui.BringWindowToTop(hwnd)
+            except (TypeError, Exception):  # pylint: disable=broad-except
+                pass
             return True
         except Exception:  # pylint: disable=broad-except
             continue
@@ -229,15 +235,25 @@ def bring_window_to_front(hwnd: int) -> Optional[int]:
         return None
     prev = win32gui.GetForegroundWindow()
     try:
+        # Foreground focus can fail due to Windows restrictions; treat as best-effort.
         win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
-        win32gui.BringWindowToTop(hwnd)
-        win32gui.SetForegroundWindow(hwnd)
+        try:
+            win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
+        except (TypeError, Exception):  # pylint: disable=broad-except
+            pass
+        try:
+            win32gui.BringWindowToTop(hwnd)
+        except (TypeError, Exception):  # pylint: disable=broad-except
+            pass
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except (TypeError, Exception):  # pylint: disable=broad-except
+            pass
         time.sleep(FOREGROUND_DELAY)
     except Exception as exc:  # pylint: disable=broad-except
-        log(f"SetForegroundWindow failed: {exc}")
+        pass
     return prev
 
 
@@ -245,7 +261,10 @@ def restore_foreground(hwnd: Optional[int]) -> None:
     if not hwnd or not win32gui:
         return
     try:
-        win32gui.SetForegroundWindow(hwnd)
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except (TypeError, Exception):  # pylint: disable=broad-except
+            pass
     except Exception:  # pylint: disable=broad-except
         pass
 
