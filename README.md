@@ -18,7 +18,7 @@
 依赖：
 
 ```
-pip install psutil pyautogui pillow opencv-python win10toast pywin32 pywinauto
+pip install psutil pyautogui pillow opencv-python win10toast pywin32 pywinauto wmi
 ```
 
 > 记得要在本地安装这些依赖，如： D:\Python\Python311\python.exe -m pip install win10toast
@@ -56,6 +56,8 @@ D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
 - `BUTTON_REGION_HALF`：固定匹配区域半宽/半高
 - `WATCH_PROCESSES`：需要监听的进程名（小写）
 - `POLL_INTERVAL`：轮询间隔（秒）
+- `WMI_TIMEOUT_MS`：WMI 事件等待超时（毫秒）
+- `WMI_ERROR_LIMIT`：WMI 连续错误阈值（超过后回退到轮询）
 - `MATCH_CONFIDENCE`：模板匹配阈值
 
 ## 使用方法
@@ -76,7 +78,8 @@ D:\Python\Python311\python.exe D:\Study\raiden_pause\raiden_pause.py
 
 ## 原理说明
 
-- 定期轮询进程列表，判断是否有游戏/Steam 在运行
+- 优先使用 WMI 事件监听进程创建/退出（更省 CPU）
+- WMI 不可用或连续报错会自动回退到定时轮询
 - 当全部目标进程退出时，先尝试从托盘恢复雷神窗口
 - 以窗口左上角为基准，固定区域进行截图匹配
 - 匹配到“暂停时长”按钮后点击
@@ -103,6 +106,7 @@ D:\Python\Python311\python.exe -c "import cv2; print(cv2.__version__)"
 - 多显示器：尽量把雷神窗口放在主屏幕，再尝试。
 - 没有点击动作：检查是否有安全软件/权限拦截；可尝试以普通用户权限运行。
 - 一直不触发：确认 `WATCH_PROCESSES` 中的进程名与实际 exe 一致（小写）。
+- WMI 报错或无效：请先安装 `wmi`/`pywin32`，仍异常会自动回退到轮询。
 
 ## 调试工具
 
