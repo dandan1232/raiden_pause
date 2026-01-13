@@ -21,6 +21,8 @@
 pip install psutil pyautogui pillow opencv-python win10toast pywin32 pywinauto
 ```
 
+> 记得要在本地安装这些依赖，如： D:\Python\Python311\python.exe -m pip install win10toast
+
 ## 资源文件
 
 将按钮模板放到 `assets/`：
