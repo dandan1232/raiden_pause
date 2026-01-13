@@ -892,7 +892,7 @@ def main() -> None:
         register_toast_app_id()
         ensure_toast_shortcut()
         if NOTIFY_SELF_TEST:
-            notify("❤酱酱~~", "hi~~金金同学~~我来啦！！祝你今天全win！！")
+            notify("❤酱酱~~", "hi~~~我来啦！！祝你今天全win！！")
 
     log("Raiden pause watcher started.")
     log(f"Watching processes: {sorted(WATCH_PROCESSES)}")
