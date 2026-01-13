@@ -135,7 +135,11 @@ NOTIFY_DEBUG = True
 # Debug: send a test toast on startup.
 NOTIFY_SELF_TEST = True
 # Paths to template images.
-BASE_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    # PyInstaller uses a temp unpack dir exposed via sys._MEIPASS.
+    BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
 TOAST_APP_ID = "RaidenPause.NotEatTime"
 TOAST_SHORTCUT_NAME = "\u4e0d\u51c6\u5403\u6211\u65f6\u957f--v1.0"
