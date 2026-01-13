@@ -1,0 +1,16 @@
+# Build (onedir) with PyInstaller. Run from repo root.
+
+D:\Python\Python311\python.exe -m pip install -r requirements.txt
+D:\Python\Python311\python.exe -m pip install pyinstaller winsdk
+
+D:\Python\Python311\python.exe -m PyInstaller `
+  --noconfirm --clean `
+  --name raiden_pause `
+  --onedir `
+  --add-data "assets;assets" `
+  --hidden-import win32com.client `
+  --hidden-import win32com.propsys `
+  --collect-submodules winsdk `
+  raiden_pause.py
+
+# Output: dist\raiden_pause\raiden_pause.exe
