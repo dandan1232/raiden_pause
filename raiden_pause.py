@@ -2,7 +2,7 @@
 Simple watchdog to pause Leishen Accelerator when games/Steam exit.
 
 Requirements (install in your venv):
-  pip install psutil pyautogui pillow opencv-python win10toast pywinauto pywin32
+  pip install psutil pyautogui pillow opencv-python win10toast pywinauto pywin32 wmi
 
 Behavior:
 - Polls for configured game processes (or Steam) every few seconds.
@@ -27,6 +27,10 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple, TYPE_CHECKING, Any
 
 import psutil
+try:
+    import wmi  # type: ignore
+except ImportError:
+    wmi = None
 
 try:
     import pyautogui
@@ -86,6 +90,11 @@ WATCH_PROCESSES = {
 # How often to poll for processes (seconds).
 POLL_INTERVAL = 5
 
+# WMI event wait timeout (milliseconds) when running event-driven watcher.
+WMI_TIMEOUT_MS = 1000
+# Consecutive WMI errors before falling back to polling.
+WMI_ERROR_LIMIT = 5
+
 # UI timing (seconds); reduce to lower latency if stable.
 FOREGROUND_DELAY = 0.1
 TRAY_CLICK_DELAY = 0.2
@@ -134,6 +143,48 @@ def any_process_running(names: Iterable[str]) -> bool:
         if name and name.lower() in target:
             return True
     return False
+
+
+def get_watched_process_counts(names: Iterable[str]) -> dict:
+    counts: dict = {}
+    target = {n.lower() for n in names}
+    if not target:
+        return counts
+    for proc in psutil.process_iter(["name"]):
+        name = proc.info.get("name")
+        if not name:
+            continue
+        low = name.lower()
+        if low in target:
+            counts[low] = counts.get(low, 0) + 1
+    return counts
+
+
+def total_watched_count(counts: dict) -> int:
+    return sum(counts.values())
+
+
+def extract_event_process_name(evt: Any) -> str:
+    for attr in ("ProcessName", "Caption", "Name"):
+        try:
+            val = getattr(evt, attr, None)
+        except Exception:  # pylint: disable=broad-except
+            val = None
+        if val:
+            return str(val)
+    try:
+        target = getattr(evt, "TargetInstance", None)
+        if target:
+            for attr in ("Name", "Caption"):
+                try:
+                    val = getattr(target, attr, None)
+                except Exception:  # pylint: disable=broad-except
+                    val = None
+                if val:
+                    return str(val)
+    except Exception:  # pylint: disable=broad-except
+        pass
+    return ""
 
 
 def get_process_pids(name: str) -> List[int]:
@@ -579,15 +630,7 @@ def try_pause_accelerator() -> None:
         restore_foreground(prev_foreground)
 
 
-def main() -> None:
-    if not ASSETS_DIR.exists():
-        log(f"Assets folder missing: {ASSETS_DIR}")
-        sys.exit(1)
-
-    log("Raiden pause watcher started.")
-    log(f"Watching processes: {sorted(WATCH_PROCESSES)}")
-    state_in_game = False
-
+def poll_watch_loop(state_in_game: bool = False) -> None:
     while True:
         try:
             running = any_process_running(WATCH_PROCESSES)
@@ -604,6 +647,88 @@ def main() -> None:
         except Exception as exc:  # pylint: disable=broad-except
             log(f"Loop error: {exc}")
         time.sleep(POLL_INTERVAL)
+
+
+def wmi_watch_loop() -> bool:
+    if not wmi:
+        log("Python wmi package not installed; falling back to polling.")
+        return False
+    try:
+        conn = wmi.WMI()
+        start_watcher = conn.Win32_Process.watch_for("creation")
+        stop_watcher = conn.Win32_Process.watch_for("deletion")
+    except Exception as exc:  # pylint: disable=broad-except
+        log(f"WMI watcher init failed: {exc}")
+        return False
+
+    target_names = {n.lower() for n in WATCH_PROCESSES}
+    counts = get_watched_process_counts(target_names)
+    state_in_game = total_watched_count(counts) > 0
+    if state_in_game:
+        log("Detected game/Steam running (initial via WMI).")
+    else:
+        log("Initial state: idle (no watched processes).")
+
+    error_streak = 0
+    while True:
+        try:
+            start_evt = None
+            stop_evt = None
+            try:
+                start_evt = start_watcher(timeout_ms=WMI_TIMEOUT_MS)
+            except wmi.x_wmi_timed_out:  # type: ignore[attr-defined]
+                start_evt = None
+            try:
+                stop_evt = stop_watcher(timeout_ms=WMI_TIMEOUT_MS)
+            except wmi.x_wmi_timed_out:  # type: ignore[attr-defined]
+                stop_evt = None
+            error_streak = 0
+
+            if start_evt:
+                name = extract_event_process_name(start_evt)
+                low = name.lower() if name else ""
+                if low in target_names:
+                    counts[low] = counts.get(low, 0) + 1
+                    if not state_in_game:
+                        log("Detected game/Steam running. (WMI)")
+                        state_in_game = True
+                    continue
+
+            if stop_evt:
+                name = extract_event_process_name(stop_evt)
+                low = name.lower() if name else ""
+                if low in target_names:
+                    if counts.get(low, 0) > 0:
+                        counts[low] -= 1
+                        if counts[low] <= 0:
+                            counts.pop(low)
+                    if total_watched_count(counts) == 0 and state_in_game:
+                        log("Detected all watched processes stopped. (WMI)")
+                        try_pause_accelerator()
+                        state_in_game = False
+                    continue
+        except KeyboardInterrupt:
+            log("Exiting by user.")
+            break
+        except Exception as exc:  # pylint: disable=broad-except
+            error_streak += 1
+            log(f"WMI watch loop error ({error_streak}/{WMI_ERROR_LIMIT}): {exc}")
+            if error_streak >= WMI_ERROR_LIMIT:
+                log("WMI unstable; falling back to polling.")
+                return False
+            time.sleep(1)
+    return True
+
+
+def main() -> None:
+    if not ASSETS_DIR.exists():
+        log(f"Assets folder missing: {ASSETS_DIR}")
+        sys.exit(1)
+
+    log("Raiden pause watcher started.")
+    log(f"Watching processes: {sorted(WATCH_PROCESSES)}")
+    if not wmi_watch_loop():
+        poll_watch_loop()
 
 
 if __name__ == "__main__":
