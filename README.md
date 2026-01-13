@@ -14,7 +14,7 @@
 
 - 进程监听改为 WMI 事件驱动，异常时自动回退轮询，降低 CPU 占用。
 - 通知改用 Windows SDK（winsdk）发送，支持自定义应用名与图标；不可用时回退 win10toast。
-- 新增 AppUserModelID 注册与开始菜单快捷方式，确保通知左上角显示“不准吃我时长”与自定义图标。
+- 新增 AppUserModelID 注册与开始菜单快捷方式，确保通知左上角显示“不准吃我时长--v1.0”与自定义图标。
 - 新增通知图标资源：`assets/logo.ico` / `assets/logo.png`。
 - 依赖新增 `winsdk`（`winrt` 在 Python 3.11 上无可用发行版，因此改用 winsdk）。
 

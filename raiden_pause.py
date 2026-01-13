@@ -138,7 +138,11 @@ NOTIFY_SELF_TEST = True
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
 TOAST_APP_ID = "RaidenPause.NotEatTime"
-TOAST_SHORTCUT_NAME = "\u4e0d\u51c6\u5403\u6211\u65f6\u957f"
+TOAST_SHORTCUT_NAME = "\u4e0d\u51c6\u5403\u6211\u65f6\u957f--v1.0"
+LEGACY_SHORTCUT_NAMES = [
+    "\u4e0d\u51c6\u5403\u6211\u65f6\u957f",
+    "\u4e0d\u51c6\u5403\u6211\u65f6\u957f--V1.0",
+]
 TOAST_ICON_ICO = ASSETS_DIR / "logo.ico"
 TOAST_ICON_PNG = ASSETS_DIR / "logo.png"
 START_BUTTON = ASSETS_DIR / "start_button.png"     # red “暂停时长”
@@ -206,6 +210,17 @@ def ensure_toast_shortcut() -> None:
         shortcut_dir.mkdir(parents=True, exist_ok=True)
     except Exception:  # pylint: disable=broad-except
         return
+    for name in LEGACY_SHORTCUT_NAMES:
+        if name == TOAST_SHORTCUT_NAME:
+            continue
+        legacy_path = shortcut_dir / f"{name}.lnk"
+        try:
+            if legacy_path.exists():
+                legacy_path.unlink()
+                if NOTIFY_DEBUG:
+                    log(f"Removed legacy toast shortcut: {legacy_path}")
+        except Exception:  # pylint: disable=broad-except
+            pass
 
     try:
         from win32com.client import Dispatch  # type: ignore
